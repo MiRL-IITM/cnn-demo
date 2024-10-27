@@ -15,20 +15,32 @@ MASK_PATH = (
 )
 
 
+# Function to create a DataFrame containing image IDs from the dataset
 def create_df():
+    # Initialize empty list to store image names
     name = []
+    # Walk through the image directory
     for dirname, _, filenames in os.walk(IMAGE_PATH):
+        # For each file, extract the name without extension and add to list
         for filename in filenames:
             name.append(filename.split(".")[0])
+    # Create and return a DataFrame with image IDs and sequential indices
     return pd.DataFrame({"id": name}, index=np.arange(0, len(name)))
 
 
 def get_data_splits():
+    # Create DataFrame containing image IDs
     df = create_df()
+
+    # Split data into training+validation set (90%) and test set (10%)
     X_trainval, X_test = train_test_split(
         df["id"].values, test_size=0.1, random_state=19
     )
+
+    # Further split training+validation set into training set (85%) and validation set (15%)
     X_train, X_val = train_test_split(X_trainval, test_size=0.15, random_state=19)
+
+    # Return the three splits: training, validation and test sets
     return X_train, X_val, X_test
 
 
@@ -46,35 +58,56 @@ class DroneDataset(Dataset):
         return len(self.X)
 
     def __getitem__(self, idx):
+        # Load image and convert from BGR to RGB color space
         img = cv2.imread(self.img_path + self.X[idx] + ".jpg")
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+        # Load corresponding segmentation mask in grayscale
         mask = cv2.imread(self.mask_path + self.X[idx] + ".png", cv2.IMREAD_GRAYSCALE)
 
+        # Apply data augmentation transforms if specified
         if self.transform is not None:
             aug = self.transform(image=img, mask=mask)
             img = Image.fromarray(aug["image"])
             mask = aug["mask"]
 
+        # Convert numpy array to PIL Image if no transforms applied
         if self.transform is None:
             img = Image.fromarray(img)
 
+        # Convert image to tensor and normalize using ImageNet statistics
         t = T.Compose([T.ToTensor(), T.Normalize(self.mean, self.std)])
         img = t(img)
+
+        # Convert mask to long tensor
         mask = torch.from_numpy(mask).long()
 
+        # Split image and mask into patches if specified
         if self.patches:
             img, mask = self.tiles(img, mask)
 
+        # Return image-mask pair
         return img, mask
 
     def tiles(self, img, mask):
+        # Split image into overlapping patches of size 512x768
+        # First unfold creates patches along height, second unfold along width
         img_patches = img.unfold(1, 512, 512).unfold(2, 768, 768)
+
+        # Reshape patches into (3, num_patches, 512, 768) where 3 is number of channels
         img_patches = img_patches.contiguous().view(3, -1, 512, 768)
+
+        # Rearrange dimensions to get (num_patches, 3, 512, 768) for batch processing
         img_patches = img_patches.permute(1, 0, 2, 3)
 
+        # Split mask into corresponding patches of same size
+        # Mask is single channel so only needs two unfolds
         mask_patches = mask.unfold(0, 512, 512).unfold(1, 768, 768)
+
+        # Reshape into (num_patches, 512, 768)
         mask_patches = mask_patches.contiguous().view(-1, 512, 768)
 
+        # Return image patches and corresponding mask patches
         return img_patches, mask_patches
 
 
